@@ -1,6 +1,6 @@
 # CamWebServer
 
-A web-based camera streaming application for the DFROBOT ESP32-S3 AI Camera V1.0. Modification of [DFR1154_Example Script]{https://github.com/DFRobot/DFR1154_Examples/tree/master/5.3%20CameraWebServer}
+A web-based camera streaming application for the DFROBOT ESP32-S3 AI Camera V1.0. Modification of [DFR1154_Example Script](https://github.com/DFRobot/DFR1154_Examples/tree/master/5.3%20CameraWebServer)
 
 ## Overview
 
