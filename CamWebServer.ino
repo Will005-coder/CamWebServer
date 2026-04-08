@@ -40,8 +40,8 @@ NOTE: This has been verified to work on Edge Browser and not Chrome.
 #define LED_GPIO_NUM  47
 
 Preferences preferences;
-const char* const ssid = "WilliamsS25";
-const char* const password = "willhem14";
+const char* const ssid = "****";
+const char* const password = "****";
 
 static unsigned long lastCheck = 0;
 
