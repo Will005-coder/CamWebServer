@@ -1,9 +1,10 @@
 /*
-CamWebServer.ino
+CamWebServer.ino - MODIFIED WITH BME688 SENSOR SUPPORT
 
 A modification of the DFR1154 sample script.
 
 Description: Creates a webcam port running from the DFROBOT ESP32-S3 AI Camera V1.0
+             with optional BME688 environmental sensor over I2C
 
 Arduino Tool Configs:
   - USB CDC on Boot: Enabled
@@ -19,7 +20,9 @@ NOTE: This has been verified to work on Edge Browser and not Chrome.
 #include "esp_camera.h"
 #include "camera_index.h"
 #include <Preferences.h>
+#include "BME688_Sensor.h"
 
+// ============== CAMERA PIN CONFIGURATION ==============
 #define PWDN_GPIO_NUM     -1
 #define RESET_GPIO_NUM    -1
 #define XCLK_GPIO_NUM     5
@@ -34,23 +37,28 @@ NOTE: This has been verified to work on Edge Browser and not Chrome.
 #define VSYNC_GPIO_NUM    1
 #define HREF_GPIO_NUM     2
 #define PCLK_GPIO_NUM     15
-#define SIOD_GPIO_NUM  8
-#define SIOC_GPIO_NUM  9
+#define SIOD_GPIO_NUM     8
+#define SIOC_GPIO_NUM     9
+#define LED_GPIO_NUM      47
 
-#define LED_GPIO_NUM  47
+// ============== BME688 SENSOR ==============
+BME688_Sensor bme688;  // Sensor instance
 
+// ============== GLOBAL VARIABLES ==============
 Preferences preferences;
 const char* const ssid = "****";
 const char* const password = "****";
 
 static unsigned long lastCheck = 0;
+static unsigned long lastTempCheck = 0;
+const unsigned long TEMP_READ_INTERVAL = 2000;  // Read temperature every 2 seconds
 
 void startCameraServer();
 void setupLedFlash(int pin);
 
 void connectToWiFi(const char* ssid, const char* password) {
   WiFi.begin(ssid, password);
-  WiFi.setTxPower(WIFI_POWER_2dBm); // Reduces current rating when searching for wifi: fix for inconsistent wifi connections status
+  WiFi.setTxPower(WIFI_POWER_2dBm);
   Serial.begin(115200);
   Serial.printf("Connecting to WiFi: %s\n", ssid);
   int retries = 0;
@@ -68,7 +76,6 @@ void connectToWiFi(const char* ssid, const char* password) {
     Serial.println("\nFailed to connect to WiFi.");
   }
 }
-
 
 void initWiFi() {
   preferences.begin("wifi", false);
@@ -128,14 +135,12 @@ void initCamera(){
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.frame_size = FRAMESIZE_VGA;
-  config.pixel_format = PIXFORMAT_JPEG;  // for streaming
-  //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
+  config.pixel_format = PIXFORMAT_JPEG;
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
   config.jpeg_quality = 12;
   config.fb_count = 1;
 
- // if PSRAM IC present, init with higher quality
   if (config.pixel_format == PIXFORMAT_JPEG) {
     if (psramFound()) {
       Serial.println("PSRAM found!");
@@ -149,7 +154,6 @@ void initCamera(){
     }
   }
 
-  // camera init
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed with error 0x%x\n", err);
@@ -158,8 +162,6 @@ void initCamera(){
   
   Serial.println("Camera initialized successfully");
 
-  // Get sensor and configure it
-  //@Error_catch: Bad camera sensor
   sensor_t *s = esp_camera_sensor_get();
   if (s == NULL) {
     Serial.println("ERROR: Camera sensor not found!");
@@ -168,13 +170,11 @@ void initCamera(){
   
   Serial.printf("Camera sensor PID: 0x%02X\n", s->id.PID);
 
-  // Configure sensor based on type
-  //@Error_catch: Wrong camera config
   if (s->id.PID == OV3660_PID) {
     Serial.println("Detected OV3660 sensor");
-    s->set_vflip(s, 1);        // flip it back
-    s->set_brightness(s, 1);   // up the brightness just a bit
-    s->set_saturation(s, -2);  // lower the saturation
+    s->set_vflip(s, 1);
+    s->set_brightness(s, 1);
+    s->set_saturation(s, -2);
   } else if (s->id.PID == OV5640_PID) {
     Serial.println("Detected OV5640 sensor");
     s->set_vflip(s, 1);
@@ -184,29 +184,40 @@ void initCamera(){
     Serial.printf("Unknown camera sensor: 0x%02X\n", s->id.PID);
   }
 
-  // Set frame size for streaming
   s->set_framesize(s, FRAMESIZE_QVGA);
-  
   Serial.println("Camera configuration complete");
+}
+
+void initBME688() {
+  Serial.println("\n======================================");
+  Serial.println("  BME688 Environmental Sensor Setup");
+  Serial.println("======================================");
+  
+  if (bme688.begin()) {
+    Serial.println("✓ BME688 initialized successfully\n");
+  } else {
+    Serial.println("× BME688 failed to initialize");
+    Serial.println("  Camera will continue running without sensor data\n");
+  }
 }
 
 void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   delay(2000);  
-  Serial.println("\n\n=== ESP32-S3 AI Camera Web Server ===\n");
+  Serial.println("\n\n=== ESP32-S3 AI Camera Web Server (with BME688) ===\n");
   
   initCamera();
   setupLedFlash(LED_GPIO_NUM);
+  initBME688();  // Initialize BME688 sensor
   initWiFi();
   startCameraServer();
   
-  Serial.println(" Setup complete!");
+  Serial.println("Setup complete!");
 }
 
 void loop() {
-  //@Error_catch: Proof of image capture
-  // Every 5 seconds, try to capture a frame and report status
+  // Capture camera frame every 5 seconds
   if (millis() - lastCheck > 5000) {
     lastCheck = millis();
     
@@ -217,6 +228,19 @@ void loop() {
       esp_camera_fb_return(fb);
     } else {
       Serial.println("Failed to capture frame - Camera busy or error");
+    }
+  }
+  
+  // Read BME688 temperature every 2 seconds
+  if (millis() - lastTempCheck > TEMP_READ_INTERVAL) {
+    lastTempCheck = millis();
+    
+    if (bme688.isInitialized()) {
+      float tempCelsius;
+      if (bme688.readTemperature(tempCelsius)) {
+        Serial.printf("[SENSOR] Temperature: %.2f°C\n", tempCelsius);
+      }
+      // If read fails, error is already printed by the sensor class
     }
   }
   
